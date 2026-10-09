@@ -175,129 +175,23 @@ def pill(txt, font, size, bg, fg, padx=46, pady=24, radius=None, border=None):
 
 
 # ---------------------------------------------------------------- 애플 기기 일러스트
-SS = 2  # 슈퍼샘플링 배율
-
-
-def wallpaper(w, h, blobs, base=(30, 20, 80), seed=0):
-    rng = np.random.default_rng(seed)
-    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
-    img = np.ones((h, w, 3), np.float32) * np.array(base, np.float32)
-    for col in blobs:
-        cx, cy = rng.uniform(0, w), rng.uniform(0, h)
-        r = rng.uniform(0.35, 0.7) * max(w, h)
-        g = np.exp(-(((x - cx) ** 2 + (y - cy) ** 2) / (r * r)))[..., None]
-        img = img * (1 - g) + np.array(col, np.float32) * g
-    return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
-
-
-def finish(img, glow=(255, 255, 255)):
-    """슈퍼샘플 이미지를 축소하고 바깥 글로우를 붙인다."""
-    img = img.resize((img.width // SS, img.height // SS), Image.LANCZOS)
+def load_device(name):
+    """매장 영상에서 원근 보정으로 잘라낸 실제 기기 이미지(assets/, make_device_cutouts.py) + 글로우."""
+    img = Image.open(os.path.join(ASSET_DIR, f"{name}.png")).convert("RGBA")
     m = 50
     out = Image.new("RGBA", (img.width + 2 * m, img.height + 2 * m), (0, 0, 0, 0))
     a = Image.new("L", out.size, 0)
     a.paste(img.getchannel("A"), (m, m))
-    g = Image.new("RGBA", out.size, glow + (0,))
-    g.putalpha(a.filter(ImageFilter.GaussianBlur(18)).point(lambda v: int(v * 0.85)))
+    g = Image.new("RGBA", out.size, (255, 255, 255, 0))
+    g.putalpha(a.filter(ImageFilter.GaussianBlur(16)).point(lambda v: int(v * 0.55)))
     out = Image.alpha_composite(out, g)
     out.paste(img, (m, m), img)
     return out
 
 
-def shine(d, w, h):
-    d.polygon([(w * 0.05, 0), (w * 0.45, 0), (w * 0.05, h * 0.5), (0, h * 0.5)],
-              fill=(255, 255, 255, 38))
-
-
-def make_iphone():
-    w, h = 300 * SS, 620 * SS
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((0, 0, w - 1, h - 1), 54 * SS, fill=(105, 150, 222),
-                        outline=(80, 118, 190), width=5 * SS)
-    d.rounded_rectangle((16 * SS, 16 * SS, 170 * SS, 180 * SS), 40 * SS, fill=(128, 170, 236),
-                        outline=(96, 138, 205), width=2 * SS)
-    for cx, cy in ((60, 60), (60, 138), (128, 99)):
-        cx, cy, r = cx * SS, cy * SS, 34 * SS
-        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(78, 104, 150))
-        r2 = 26 * SS
-        d.ellipse((cx - r2, cy - r2, cx + r2, cy + r2), fill=(12, 14, 22))
-        r3 = 10 * SS
-        d.ellipse((cx - r3, cy - r3, cx + r3, cy + r3), fill=(35, 45, 80))
-        d.ellipse((cx - 14 * SS, cy - 16 * SS, cx - 4 * SS, cy - 8 * SS), fill=(220, 230, 255))
-    d.ellipse((140 * SS, 36 * SS, 158 * SS, 54 * SS), fill=(250, 240, 200))
-    shine(d, w, h)
-    return finish(img)
-
-
-def make_ipad():
-    w, h = 500 * SS, 700 * SS
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((0, 0, w - 1, h - 1), 50 * SS, fill=(205, 210, 220))
-    d.rounded_rectangle((8 * SS, 8 * SS, w - 8 * SS, h - 8 * SS), 44 * SS, fill=(10, 10, 12))
-    sw, sh = w - 44 * SS, h - 44 * SS
-    wp = wallpaper(sw // 4, sh // 4, [(255, 80, 160), (80, 140, 255), (255, 190, 60)],
-                   base=(40, 20, 90), seed=2).resize((sw, sh), Image.BICUBIC).convert("RGBA")
-    wd = ImageDraw.Draw(wp)
-    for k in range(4):
-        x = 40 * SS + k * 105 * SS
-        wd.rounded_rectangle((x, sh - 130 * SS, x + 80 * SS, sh - 50 * SS), 20 * SS,
-                             fill=(255, 255, 255, 140))
-    wd.rounded_rectangle((40 * SS, 60 * SS, 220 * SS, 240 * SS), 30 * SS, fill=(255, 255, 255, 110))
-    wd.rounded_rectangle((240 * SS, 60 * SS, 420 * SS, 240 * SS), 30 * SS, fill=(255, 255, 255, 80))
-    mask = Image.new("L", (sw, sh), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, sw - 1, sh - 1), 30 * SS, fill=255)
-    img.paste(wp, (22 * SS, 22 * SS), mask)
-    shine(d, w, h)
-    return finish(img)
-
-
-def make_macbook():
-    w, h = 760 * SS, 500 * SS
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((50 * SS, 0, w - 50 * SS, 440 * SS), 30 * SS, fill=(190, 196, 206))
-    d.rounded_rectangle((58 * SS, 8 * SS, w - 58 * SS, 432 * SS), 24 * SS, fill=(8, 8, 10))
-    sw, sh = w - 156 * SS, 392 * SS
-    wp = wallpaper(sw // 4, sh // 4, [(60, 180, 255), (140, 90, 255), (40, 220, 200)],
-                   base=(10, 30, 70), seed=5).resize((sw, sh), Image.BICUBIC).convert("RGBA")
-    f = ImageFont.truetype(BH, 64 * SS)
-    ImageDraw.Draw(wp).text((sw // 2, sh // 2), "초고속으로", font=f, fill=WHITE, anchor="mm")
-    img.paste(wp, (78 * SS, 26 * SS))
-    d.rounded_rectangle((w // 2 - 60 * SS, 8 * SS, w // 2 + 60 * SS, 30 * SS), 10 * SS, fill=(8, 8, 10))
-    d.polygon([(30 * SS, 438 * SS), (w - 30 * SS, 438 * SS), (w, 474 * SS), (0, 474 * SS)],
-              fill=(208, 213, 222))
-    d.rounded_rectangle((0, 470 * SS, w - 1, 496 * SS), 12 * SS, fill=(160, 166, 178))
-    d.rounded_rectangle((w // 2 - 70 * SS, 470 * SS, w // 2 + 70 * SS, 480 * SS), 5 * SS,
-                        fill=(130, 136, 148))
-    return finish(img)
-
-
-def make_watch():
-    w, h = 270 * SS, 520 * SS
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((60 * SS, 0, 200 * SS, 160 * SS), 30 * SS, fill=(28, 28, 34))
-    d.rounded_rectangle((60 * SS, 360 * SS, 200 * SS, 520 * SS), 30 * SS, fill=(28, 28, 34))
-    for k in range(5):
-        y = 400 * SS + k * 22 * SS
-        d.ellipse((124 * SS, y, 136 * SS, y + 12 * SS), fill=(70, 70, 80))
-    d.rounded_rectangle((246 * SS, 190 * SS, 266 * SS, 260 * SS), 8 * SS, fill=(70, 70, 80))
-    d.rounded_rectangle((10 * SS, 110 * SS, 250 * SS, 410 * SS), 70 * SS, fill=(48, 48, 56),
-                        outline=(100, 100, 115), width=4 * SS)
-    d.rounded_rectangle((26 * SS, 126 * SS, 234 * SS, 394 * SS), 56 * SS, fill=(0, 0, 0))
-    d.arc((60 * SS, 170 * SS, 200 * SS, 310 * SS), -90, 200, fill=(255, 60, 90), width=12 * SS)
-    d.arc((84 * SS, 194 * SS, 176 * SS, 286 * SS), -90, 140, fill=(160, 255, 60), width=12 * SS)
-    f = ImageFont.truetype(BH, 52 * SS)
-    d.text((130 * SS, 350 * SS), "10:00", font=f, fill=WHITE, anchor="mm")
-    shine(d, w, h)
-    return finish(img)
-
-
-print("기기 일러스트 생성…", flush=True)
-DEV = dict(iphone=make_iphone(), ipad=make_ipad(), mac=make_macbook(), watch=make_watch())
-DEV_SCALE = dict(iphone=1.0, ipad=0.85, mac=0.8, watch=0.95)
+ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+DEV = {n: load_device(n) for n in ("iphone", "ipad", "mac", "watch")}
+DEV_SCALE = dict(iphone=0.9, ipad=0.82, mac=0.72, watch=0.88)
 
 
 # 혜성 꼬리
@@ -325,7 +219,7 @@ def dev_sprite(name, scale, rot):
     if s is None:
         s = DEV[name]
         sc = key[1] * DEV_SCALE[name]
-        s = s.resize((int(s.width * sc), int(s.height * sc)), Image.BILINEAR)
+        s = s.resize((int(s.width * sc), int(s.height * sc)), Image.LANCZOS)
         if key[2]:
             s = s.rotate(key[2], resample=Image.BICUBIC, expand=True)
         if len(_rot_cache) > 600:
