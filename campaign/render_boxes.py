@@ -21,7 +21,6 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 W, H, FPS = 1080, 1920, 30
 CLIP_DIR, FONT_DIR, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
-BH = os.path.join(FONT_DIR, "BlackHanSans.ttf")
 NOTO = os.path.join(FONT_DIR, "NotoSansKR-Black.ttf")
 NOTO_M = os.path.join(FONT_DIR, "NotoSansKR-Medium.ttf")
 ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -147,6 +146,9 @@ def text_sprite(txt, font, size, fill=WHITE, stroke=0, stroke_fill=NAVY, shadow=
         img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(8)))
     ImageDraw.Draw(img).multiline_text(pos, txt, font=f, fill=fill, stroke_width=stroke,
                                        stroke_fill=stroke_fill, align="center", spacing=spacing)
+    if img.width > W - 20:  # 화면 폭을 넘으면 축소
+        k = (W - 20) / img.width
+        img = img.resize((int(img.width * k), int(img.height * k)), Image.LANCZOS)
     return img
 
 
@@ -343,8 +345,8 @@ def draw_box(canvas, kind, pos, angles, scale=1.0, fade=1.0):
 
 
 # ---------------------------------------------------------------- 배경 (하늘 → 부산 도심 → 매장)
-BGH = 3100
-HORIZON = 2240
+BGH = 2900
+HORIZON = 2330  # 매장 사진 상단(하늘)과 맞닿는 높이
 
 
 def make_cloud(w, seed):
@@ -379,7 +381,7 @@ def ridge(n, seed, octaves=5):
 def make_background():
     rng = random.Random(5)
     yy = np.linspace(0, 1, BGH)[:, None, None]
-    top, mid, low = (np.array(c, np.float32) for c in ((22, 86, 205), (90, 165, 240), (200, 228, 250)))
+    top, mid, low = (np.array(c, np.float32) for c in ((22, 86, 205), (90, 165, 240), (165, 205, 240)))
     t = np.clip(yy / (HORIZON / BGH), 0, 1)
     sky = np.where(t < 0.6, top * (1 - t / 0.6) + mid * (t / 0.6), mid * (1 - (t - 0.6) / 0.4) + low * ((t - 0.6) / 0.4))
     img = np.repeat(sky, W, axis=1)
@@ -406,93 +408,34 @@ def make_background():
         c2 = c.resize((int(c.width * s), int(c.height * s)), Image.BILINEAR)
         cy = rng.uniform(HORIZON - 520, HORIZON - 80) if k < 11 else rng.uniform(500, 1500)
         bg.paste(c2, (int(rng.uniform(-300, W - 200)), int(cy - c2.height / 2)), c2)
-    # 산 (안개 낀 3겹 능선)
-    for k, (col, base, amp) in enumerate((((150, 180, 210), HORIZON - 40, 160),
-                                          ((120, 150, 185), HORIZON - 5, 120),
-                                          ((95, 125, 160), HORIZON + 25, 80))):
-        r = ridge(W, 10 + k)
-        pts = [(x, base - amp * (0.6 + 0.4 * r[x])) for x in range(0, W, 4)] + [(W, BGH), (0, BGH)]
-        d.polygon(pts, fill=col + (255,))
-    # 바다/강
-    d.rectangle((0, HORIZON + 60, W, HORIZON + 170), fill=(150, 195, 230, 255))
-    for k in range(60):
-        x = rng.uniform(0, W)
-        y = rng.uniform(HORIZON + 70, HORIZON + 165)
-        d.line((x, y, x + rng.uniform(20, 90), y), fill=(235, 248, 255, 160), width=2)
-    # 광안대교 느낌의 다리
-    d.line((0, HORIZON + 110, W, HORIZON + 95), fill=(225, 230, 240, 255), width=6)
-    for x in (300, 760):
-        d.line((x, HORIZON + 103, x, HORIZON + 10), fill=(230, 235, 245, 255), width=8)
-        for k in range(-6, 7):
-            d.line((x, HORIZON + 14, x + k * 38, HORIZON + 100), fill=(230, 235, 245, 200), width=2)
-    # 도시 빌딩 (먼 줄 → 가까운 줄)
-    rows = [(HORIZON + 200, 0.65, (40, 120), (190, 205, 222)),
-            (HORIZON + 330, 0.35, (60, 200), (170, 186, 206)),
-            (HORIZON + 520, 0.15, (90, 320), (150, 166, 188)),
-            (HORIZON + 760, 0.0, (140, 460), (128, 144, 168))]
-    for base_y, haze, (hmin, hmax), col in rows:
-        x = -20
-        while x < W:
-            bw = rng.randint(50, 130) if haze > 0.3 else rng.randint(80, 180)
-            bh = rng.randint(hmin, hmax)
-            c = tuple(int(v + rng.randint(-12, 12)) for v in col)
-            d.rectangle((x, base_y - bh, x + bw, base_y + 400), fill=c + (255,))
-            lit = tuple(min(255, v + 40) for v in c)
-            d.rectangle((x, base_y - bh, x + 6, base_y + 400), fill=lit + (255,))
-            wc = tuple(max(0, v - 30) for v in c)
-            gx, gy = (14, 18) if haze > 0.3 else (20, 26)
-            for wy in range(int(base_y - bh + 10), int(base_y + 380), gy):
-                for wx in range(x + 10, x + bw - 8, gx):
-                    if rng.random() < 0.85:
-                        d.rectangle((wx, wy, wx + gx - 7, wy + gy - 9), fill=wc + (255,))
-            x += bw + rng.randint(2, 14)
     return bg
 
 
-def make_store(bg):
-    """롯데하이마트 덕천점 매장(유리 파사드)을 배경 하단 중앙에 합성."""
-    d = ImageDraw.Draw(bg, "RGBA")
-    x0, x1, top, bot = 90, 990, BGH - 520, BGH
-    # 바닥 광장
-    d.rectangle((0, bot - 70, W, bot), fill=(205, 205, 210, 255))
-    # 건물 몸체 + 유리
-    gl = np.zeros((bot - top, x1 - x0, 3), np.float32)
-    gy = np.linspace(0, 1, bot - top)[:, None]
-    gx = np.linspace(0, 1, x1 - x0)[None, :]
-    for c, v in enumerate((150, 200, 240)):
-        gl[..., c] = v + 70 * (1 - gy) - 40 * gy + 30 * np.sin(gx * 9 + gy * 3)
-    glass = Image.fromarray(np.clip(gl, 0, 255).astype(np.uint8))
-    bg.paste(glass, (x0, top))
-    # 반사 하이라이트
-    for k in range(5):
-        xx = x0 + 80 + k * 190
-        d.polygon([(xx, top + 90), (xx + 60, top + 90), (xx - 40, bot - 70), (xx - 100, bot - 70)],
-                  fill=(255, 255, 255, 40))
-    # 멀리언(프레임)
-    for xx in range(x0, x1 + 1, 112):
-        d.rectangle((xx - 3, top + 90, xx + 3, bot - 70), fill=(225, 228, 235, 255))
-    d.rectangle((x0, top + 300, x1, top + 306), fill=(225, 228, 235, 255))
-    # 지붕 + 빨간 간판 밴드
-    d.rectangle((x0 - 30, top - 10, x1 + 30, top + 90), fill=RED + (255,))
-    d.rectangle((x0 - 30, top + 84, x1 + 30, top + 96), fill=(250, 250, 250, 255))
-    f = ImageFont.truetype(NOTO, 64)
-    d.text((W / 2, top + 40), "롯데하이마트  덕천점", font=f, fill=WHITE, anchor="mm")
-    # 유리 안쪽 'Apple' 사인
-    f2 = ImageFont.truetype(NOTO_M, 70)
-    d.rounded_rectangle((W / 2 - 170, top + 150, W / 2 + 170, top + 260), 20, fill=(255, 255, 255, 215))
-    d.text((W / 2, top + 205), "Apple", font=f2, fill=(30, 30, 34), anchor="mm")
-    # 입구
-    d.rectangle((W / 2 - 120, bot - 230, W / 2 + 120, bot - 70), fill=(60, 80, 110, 200))
-    d.line((W / 2, bot - 230, W / 2, bot - 70), fill=(225, 228, 235, 255), width=5)
-    # 가로수
-    for xx in (40, 1040):
-        d.rectangle((xx - 6, bot - 220, xx + 6, bot - 70), fill=(90, 70, 50, 255))
-        d.ellipse((xx - 70, bot - 360, xx + 70, bot - 190), fill=(70, 140, 80, 255))
+def store_photo():
+    """롯데하이마트 메가스토어 덕천점 외관 사진(assets/dukcheon_store_src.png).
+    하단 앱 버튼(편집/공유)이 찍힌 부분은 잘라내고 화면 폭으로 키운다."""
+    src = Image.open(os.path.join(ASSET_DIR, "dukcheon_store_src.png")).convert("RGB")
+    src = src.crop((0, 0, src.width, 296))
+    s = W / src.width
+    big = src.resize((W, int(src.height * s)), Image.LANCZOS)
+    big = big.filter(ImageFilter.UnsharpMask(radius=2, percent=70, threshold=2))
+    return ImageEnhance.Color(big).enhance(1.08)
+
+
+def compose_background():
+    bg = make_background()
+    ph = store_photo()
+    top = BGH - ph.height
+    # 사진 위쪽 하늘을 생성한 하늘과 자연스럽게 섞는다
+    a = np.ones((ph.height, W), np.float32)
+    blend = 90
+    a[:blend] = np.linspace(0, 1, blend)[:, None] ** 1.5
+    bg.paste(ph, (0, top), Image.fromarray((a * 255).astype(np.uint8)))
     return bg
 
 
 print("배경 생성…", flush=True)
-BG = make_store(make_background())
+BG = compose_background()
 
 
 def bg_view(off):
@@ -533,22 +476,21 @@ def draw_rain(c, t, rain=RAIN, tscale=1.0, spin=1.0):
 # ---------------------------------------------------------------- 텍스트 스프라이트
 SP = dict(
     a1=text_sprite("부산 하늘에서", NOTO, 104, WHITE, stroke=8),
-    a2=text_sprite("애플이\n쏟아진다?!", BH, 210, YELLOW, stroke=14),
-    b_top=pill("10월 한정 특가", BH, 84, RED, WHITE, padx=50, pady=20, border=WHITE),
-    names={k: text_sprite(n, BH, 120, WHITE, stroke=10) for k, n in
+    a2=text_sprite("애플이\n쏟아진다?!", NOTO, 210, YELLOW, stroke=14),
+    b_top=pill("10월 한정 특가", NOTO, 84, RED, WHITE, padx=50, pady=20, border=WHITE),
+    names={k: text_sprite(n, NOTO, 120, WHITE, stroke=10) for k, n in
            (("iphone", "iPhone 18 Pro"), ("ipad", "iPad Pro"), ("mac", "MacBook Air"))},
-    c1=text_sprite("롯데하이마트 덕천점에", NOTO, 84, WHITE, stroke=8),
-    c2=text_sprite("착륙 예정!", BH, 200, YELLOW, stroke=14),
-    m=[(pill("한정수량", BH, 180, RED, WHITE, padx=56, pady=26, radius=30, border=WHITE), "iPhone"),
-       (text_sprite("10월 특가", BH, 200, YELLOW, stroke=14), "iPad"),
-       (text_sprite("선착순\n특별혜택", BH, 190, YELLOW, stroke=14), "Watch"),
-       (text_sprite("오픈런\nGO!!", BH, 230, YELLOW, stroke=16), "Mac")],
+    c1=text_sprite("메가스토어 덕천점에", NOTO, 90, WHITE, stroke=8),
+    c2=text_sprite("착륙 예정!", NOTO, 200, YELLOW, stroke=14),
+    m=[(pill("한정수량", NOTO, 180, RED, WHITE, padx=56, pady=26, radius=30, border=WHITE), "iPhone"),
+       (text_sprite("10월 특가", NOTO, 200, YELLOW, stroke=14), "iPad"),
+       (text_sprite("선착순\n특별혜택", NOTO, 190, YELLOW, stroke=14), "Watch"),
+       (text_sprite("오픈런!!", NOTO, 230, YELLOW, stroke=16), "Mac")],
     m_small={n: pill(n, NOTO, 56, WHITE, NAVY) for n in ("iPhone", "iPad", "Watch", "Mac")},
     e_tag=pill("10월 한정 · 선착순 특별혜택", NOTO, 56, YELLOW, BLACK),
-    e1=text_sprite("롯데하이마트", BH, 190, WHITE, stroke=12),
-    e2=text_sprite("덕천점", BH, 230, YELLOW, stroke=14),
+    e1=text_sprite("LOTTE HIMART", NOTO, 150, WHITE, stroke=12),
+    e2=text_sprite("메가스토어 덕천점", NOTO, 130, YELLOW, stroke=12),
     e_tel=pill("T. 051-335-6100", NOTO, 64, WHITE, NAVY, padx=40, pady=18),
-    e_cta=pill("지금 오픈런 GO!", BH, 100, RED, WHITE, padx=70, pady=32, border=WHITE),
     e_note=text_sprite("※ 한정수량 소진 시 조기 종료될 수 있습니다", NOTO, 36, WHITE, stroke=4, shadow=False),
 )
 
@@ -572,10 +514,10 @@ def scene_a(i):
     c = bg_view(0)
     draw_rain(c, t + 0.0)
     at_ = out_expo(prog(i, 6, 16))
-    put(c, SP["a1"], lerp(-700, W / 2, at_), 600)
+    put(c, SP["a1"], lerp(-700, W / 2, at_), 500)
     bt = prog(i, 16, 24)
     if i >= 16:
-        put(c, SP["a2"], W / 2, 880, scale=lerp(2.5, 1, out_expo(bt)) * (1 + 0.025 * math.sin(i * 0.5)),
+        put(c, SP["a2"], W / 2, 860, scale=lerp(2.5, 1, out_expo(bt)) * (1 + 0.025 * math.sin(i * 0.5)),
             rot=-4, alpha=clamp(bt * 3))
     return flash(c, (1 - prog(i, 0, 8)) * 0.8)
 
@@ -633,6 +575,8 @@ END_FLOAT = [  # 엔딩: 레퍼런스처럼 큰 박스들이 천천히 떠 있�
     ("watch", 110, 1130, 4.2, (0.6, 0.4, 0.15)),
     ("mac", 950, 1150, 4.6, (-0.55, 0.45, -0.2)),
 ]
+VEIL = Image.fromarray((np.clip((1300 - np.arange(H)) / 200, 0, 1)[:, None]
+                        * np.ones((1, W)) * 255).astype(np.uint8))
 RAIN_SLOW = make_rain(22, 7, 8, 30)
 
 
@@ -646,18 +590,17 @@ def scene_e(i):
         y = lerp(-500, sy_, p) + 18 * math.sin(i * 0.05 + k)
         X, Y = (sx_ - W / 2) * Z / F, (y - H / 2) * Z / F
         draw_box(c, kind, (X, Y, Z), (ang[0] + 0.15 * math.sin(i * 0.03 + k), ang[1] + 0.003 * i, ang[2]))
-    veil = Image.new("RGBA", (W, H), (10, 25, 70, int(70 * prog(i, 0, 15))))
-    c.paste(veil, (0, 0), veil)
-    put(c, SP["e_tag"], W / 2, lerp(-100, 430, out_back(prog(i, 10, 20))))
-    put(c, SP["e1"], lerp(-900, W / 2, out_expo(prog(i, 16, 24))), 620)
+    # 글자 영역(하늘)만 살짝 어둡게, 아래 매장 사진은 그대로
+    k = 75 * prog(i, 0, 15)
+    c.paste((10, 25, 70), (0, 0, W, H), VEIL.point(lambda v: int(v * k / 255)))
+    put(c, SP["e_tag"], W / 2, lerp(-100, 470, out_back(prog(i, 10, 20))))
+    put(c, SP["e1"], lerp(-900, W / 2, out_expo(prog(i, 16, 24))), 660)
     lt = prog(i, 22, 30)
     sxk, syk = shake(i, 30, 10, 20)
     if i >= 22:
-        put(c, SP["e2"], W / 2 + sxk, lerp(-200, 840, lt * lt) + syk)
-    put(c, SP["e_tel"], W / 2, 1030, scale=out_back(prog(i, 34, 42)))
-    pulse = 1 + 0.06 * max(0, math.sin((i - 52) * 0.42)) * (i > 52)
-    put(c, SP["e_cta"], W / 2, lerp(H + 200, 1185, out_back(prog(i, 42, 52), 2.5)), scale=pulse)
-    put(c, SP["e_note"], W / 2, 1320, alpha=prog(i, 52, 62))
+        put(c, SP["e2"], W / 2 + sxk, lerp(-200, 850, lt * lt) + syk)
+    put(c, SP["e_tel"], W / 2, 1040, scale=out_back(prog(i, 34, 42)))
+    put(c, SP["e_note"], W / 2, 1170, alpha=prog(i, 44, 54))
     c = flash(c, (1 - prog(i, 30, 35)) * 0.4 * (i >= 30))
     return flash(c, (1 - prog(i, 0, 6)) * 0.9)
 
