@@ -622,13 +622,18 @@ SR = 44100
 
 
 def make_audio(path):
+    """배경음악 없이 장면에 맞춘 효과음만 (스테레오)."""
     dur = TOTAL / FPS
     N = int(SR * dur)
-    mix = np.zeros(N, np.float32)
+    mix = np.zeros((N, 2), np.float32)
     rng = np.random.default_rng(3)
 
-    def add(sig, t, g=1.0):
+    def add(sig, t, g=1.0, pan=0.0):
+        """pan: -1(왼쪽) ~ 1(오른쪽). sig가 (n,2)면 그대로."""
         a = int(t * SR)
+        if sig.ndim == 1:
+            l, r = math.cos((pan + 1) * math.pi / 4), math.sin((pan + 1) * math.pi / 4)
+            sig = np.stack([sig * l * 1.414, sig * r * 1.414], 1)
         if a < 0:
             sig, a = sig[-a:], 0
         if a >= N:
@@ -636,70 +641,151 @@ def make_audio(path):
         b = min(N, a + len(sig))
         mix[a:b] += sig[: b - a] * g
 
-    def band_noise(n, lo, hi):
-        X = np.fft.rfft(rng.standard_normal(n))
-        f = np.fft.rfftfreq(n, 1 / SR)
+    def noise(n):
+        return rng.standard_normal(n).astype(np.float32)
+
+    def band(x, lo, hi):
+        X = np.fft.rfft(x)
+        f = np.fft.rfftfreq(len(x), 1 / SR)
         X[(f < lo) | (f > hi)] = 0
-        y = np.fft.irfft(X, n)
+        y = np.fft.irfft(X, len(x))
         return (y / (np.abs(y).max() + 1e-9)).astype(np.float32)
 
-    tt = np.arange(int(0.45 * SR)) / SR
-    kick = np.sin(2 * np.pi * (45 * tt + (110 / 18) * (1 - np.exp(-18 * tt)))) * np.exp(-7 * tt)
-    snare = band_noise(int(0.22 * SR), 900, 9000) * np.exp(-18 * np.arange(int(0.22 * SR)) / SR)
-    hat = band_noise(int(0.06 * SR), 7000, 16000) * np.exp(-60 * np.arange(int(0.06 * SR)) / SR)
-    bt_ = np.arange(int(1.2 * SR)) / SR
-    boom = (np.sin(2 * np.pi * (38 * bt_ + 5 * (1 - np.exp(-6 * bt_)))) * np.exp(-3 * bt_)
-            + 0.6 * band_noise(len(bt_), 40, 2500) * np.exp(-8 * bt_))
+    def sweep_filter(x, f_start, f_end, width=0.9):
+        """시간에 따라 이동하는 대역통과(도플러 느낌의 우쉬)."""
+        hop, win = 512, 2048
+        out = np.zeros(len(x) + win, np.float32)
+        wnd = np.hanning(win).astype(np.float32)
+        f = np.fft.rfftfreq(win, 1 / SR)
+        for s0 in range(0, len(x), hop):
+            seg = np.zeros(win, np.float32)
+            chunk = x[s0:s0 + win]
+            seg[:len(chunk)] = chunk
+            p = s0 / max(1, len(x))
+            fc = f_start * (f_end / f_start) ** p
+            m = np.exp(-(np.log((f + 1) / fc) / width) ** 2)
+            out[s0:s0 + win] += np.fft.irfft(np.fft.rfft(seg * wnd) * m, win) * wnd
+        y = out[:len(x)]
+        return y / (np.abs(y).max() + 1e-9)
 
-    def whoosh(length=0.5):
+    def env_ar(n, attack, release_pow=2.0, peak=0.5):
+        t = np.linspace(0, 1, n)
+        return np.where(t < peak, (t / peak) ** attack, ((1 - t) / (1 - peak)) ** release_pow).astype(np.float32)
+
+    def whoosh(length, f0=600, f1=3500, peak=0.55):
         n = int(length * SR)
-        env = np.sin(np.linspace(0, np.pi, n)) ** 2
-        return band_noise(n, 250, 7000) * env
+        return sweep_filter(noise(n), f0, f1) * env_ar(n, 2.0, 2.2, peak)
 
-    beat, roots = 0.5, [55.0, 43.65, 65.41, 49.0]
-    t, k = 0.0, 0
-    while t < dur - 0.05:
-        if t >= 0.5:
-            add(kick, t, 0.85)
-            if k % 4 in (1, 3):
-                add(snare, t, 0.4)
-            add(hat, t + beat / 2, 0.2)
-            if D_END / FPS - 4 <= t < D_END / FPS:
-                add(hat, t + beat / 4, 0.14)
-                add(hat, t + 3 * beat / 4, 0.14)
-            f0 = roots[(k // 4) % 4]
-            for h in (0, 0.25):
-                b = np.arange(int(0.22 * SR)) / SR
-                env = np.minimum(1, b * 60) * np.exp(-6 * b)
-                bass = (np.sin(2 * np.pi * f0 * b) + 0.35 * np.sin(4 * np.pi * f0 * b)) * env
-                add(bass.astype(np.float32), t + h + 0.04, 0.32)
-        t += beat
-        k += 1
+    def pass_by(length=1.1):
+        """가까이 스쳐 지나가는 박스: 높은 음→낮은 음 + 볼륨 피크."""
+        n = int(length * SR)
+        return sweep_filter(noise(n), 4200, 380, 0.7) * env_ar(n, 2.5, 1.6, 0.5)
 
-    add(boom, 16 / FPS, 0.6)
-    for start, _ in HERO.values():
-        add(whoosh(0.9), (start + 2) / FPS, 0.6)
-    add(whoosh(1.6), (B_END + 5) / FPS, 0.45)
-    add(boom, (B_END + 48) / FPS, 0.6)
+    def boom(length=1.3, f=42):
+        t = np.arange(int(length * SR)) / SR
+        body = np.sin(2 * np.pi * (f * t + 6 * (1 - np.exp(-7 * t)))) * np.exp(-3.2 * t)
+        crack = band(noise(len(t)), 60, 4000) * np.exp(-14 * t)
+        return (body * 0.9 + crack * 0.55).astype(np.float32)
+
+    def hit(length=0.5):
+        t = np.arange(int(length * SR)) / SR
+        thump = np.sin(2 * np.pi * (70 * t + 4 * (1 - np.exp(-25 * t)))) * np.exp(-11 * t)
+        snap = band(noise(len(t)), 1500, 9000) * np.exp(-40 * t)
+        return (thump * 0.8 + snap * 0.6).astype(np.float32)
+
+    def pop(f0=1100, f1=380, length=0.12):
+        n = int(length * SR)
+        t = np.arange(n) / SR
+        ph = 2 * np.pi * np.cumsum(f0 * (f1 / f0) ** (t / length)) / SR
+        return (np.sin(ph) * np.exp(-28 * t) + band(noise(n), 3000, 10000) * np.exp(-90 * t) * 0.3).astype(np.float32)
+
+    def tick():
+        n = int(0.04 * SR)
+        return band(noise(n), 4000, 12000) * np.exp(-120 * np.arange(n) / SR)
+
+    def chime(notes=(1318.5, 1760.0, 2093.0, 2637.0), gap=0.07, length=1.8):
+        n = int((length + gap * len(notes)) * SR)
+        out = np.zeros(n, np.float32)
+        for k, fr in enumerate(notes):
+            t = np.arange(int(length * SR)) / SR
+            tone = (np.sin(2 * np.pi * fr * t) + 0.3 * np.sin(2 * np.pi * fr * 2.01 * t)) * np.exp(-3.2 * t)
+            a = int(k * gap * SR)
+            out[a:a + len(t)] += tone.astype(np.float32)
+        return out / np.abs(out).max()
+
+    def riser(length=1.2):
+        n = int(length * SR)
+        return sweep_filter(noise(n), 300, 6000, 1.1) * np.linspace(0, 1, n) ** 2.5
+
+    def wind(length, level_curve):
+        n = int(length * SR)
+        x = band(noise(n), 120, 1400)
+        lfo = 0.65 + 0.35 * np.sin(np.linspace(0, length * 2 * np.pi * 0.35, n))
+        return x * lfo * level_curve(np.linspace(0, 1, n))
+
+    sec = lambda f: f / FPS  # noqa: E731
+
+    # 하늘 바람 앰비언스 (하늘 장면만, 아주 은은하게)
+    add(wind(sec(C_END), lambda u: np.clip(u * 12, 0, 1) * np.clip((1 - u) * 6, 0, 1)), 0, 0.22)
+    add(wind(sec(TOTAL - D_END), lambda u: np.clip(u * 8, 0, 1) * np.clip((1 - u) * 5, 0, 1)), sec(D_END), 0.16)
+
+    # A: 오프닝
+    add(whoosh(0.5, 400, 4000, 0.8), 0.0, 0.35)
+    add(whoosh(0.35, 800, 3000, 0.7), sec(6) - 0.2, 0.4, -0.5)   # '부산 하늘에서' 슬라이드
+    add(boom(1.1, 48), sec(16), 0.75)                             # '애플이 쏟아진다?!' 쾅
+    add(pop(1300, 500), sec(16), 0.35)
+    # 하늘에서 떨어지는 작은 박스들: 멀리서 휙휙
+    for k in range(16):
+        t0 = 0.5 + k * 0.52 + rng.uniform(-0.12, 0.12)
+        if t0 < sec(C_END) - 0.5:
+            add(whoosh(rng.uniform(0.25, 0.45), 900, 2600, 0.6), t0, rng.uniform(0.08, 0.16), rng.uniform(-0.8, 0.8))
+
+    # B: 눈앞을 스치는 큰 박스 3개 + 자막
+    add(pop(900, 400), sec(A_END), 0.4)                          # '10월 한정 특가' 배지
+    for kind, (start, xoff) in HERO.items():
+        add(pass_by(1.15), sec(start) - 0.05, 0.75, xoff * 2.5)
+        add(tick(), sec(start + 6), 0.35)
+
+    # C: 카메라가 매장으로 내려감
+    add(whoosh(1.9, 2400, 300, 0.45), sec(B_END), 0.45)
+    add(whoosh(0.35, 800, 3000, 0.7), sec(B_END + 40) - 0.2, 0.4, 0.5)  # '메가스토어 덕천점에'
+    add(boom(1.0, 52), sec(B_END + 48), 0.6)                             # '착륙 예정!'
+    add(pop(1200, 450), sec(B_END + 48), 0.3)
+    add(riser(1.3), sec(C_END) - 1.3, 0.4)
+
+    # D: 실제 매장 몽타주 4컷 – 컷마다 임팩트 + 다음 박스 낙하 휙
     for k in range(4):
-        add(boom, (C_END + k * 30) / FPS, 0.85)
-        add(whoosh(0.3), (C_END + k * 30 + 22) / FPS, 0.4)
-    add(boom, (D_END + 30) / FPS, 0.85)
-    rn = int(1.2 * SR)
-    add(band_noise(rn, 500, 12000) * np.linspace(0, 1, rn) ** 3, C_END / FPS - 1.2, 0.3)
+        t0 = sec(C_END + k * 30)
+        add(hit(), t0, 0.9)
+        add(boom(0.8, 55), t0, 0.35)
+        if k < 3:
+            add(whoosh(0.3, 3000, 600, 0.8), t0 + sec(22), 0.35)
 
-    fade = int(0.6 * SR)
-    mix[-fade:] *= np.linspace(1, 0, fade)
+    # E: 엔딩
+    add(chime(), sec(D_END), 0.35)
+    add(pop(900, 420), sec(D_END + 10), 0.35)                         # 태그
+    add(whoosh(0.35, 700, 3200, 0.7), sec(D_END + 16) - 0.2, 0.4, -0.6)  # LOTTE HIMART
+    add(whoosh(0.3, 3000, 500, 0.8), sec(D_END + 22), 0.3)
+    add(boom(1.2, 46), sec(D_END + 30), 0.75)                         # 메가스토어 덕천점 쾅
+    add(pop(1000, 420), sec(D_END + 34), 0.35)                        # 전화번호
+    add(tick(), sec(D_END + 44), 0.25)
+    add(chime((2093.0, 2637.0, 3136.0), 0.09, 1.5), sec(TOTAL) - 2.4, 0.18)
+
+    fade = int(0.5 * SR)
+    mix[-fade:] *= np.linspace(1, 0, fade)[:, None]
     mix /= np.abs(mix).max() + 1e-9
-    mix *= 10 ** (-3 / 20)
+    mix *= 10 ** (-1.5 / 20)
     with wave.open(path, "wb") as w:
-        w.setnchannels(1)
+        w.setnchannels(2)
         w.setsampwidth(2)
         w.setframerate(SR)
         w.writeframes((mix * 32767).astype(np.int16).tobytes())
 
 
 if __name__ == "__main__":
+    if os.environ.get("AUDIO_ONLY"):  # 효과음만 다시 만들 때: AUDIO_ONLY=1 ... <출력.wav>
+        make_audio(OUT)
+        sys.exit()
     only = os.environ.get("FRAMES")
     if only:
         for n in map(int, only.split(",")):
